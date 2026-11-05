@@ -14,6 +14,7 @@ import { serialize, loadSave, restoreMode, storageSet, storageRemove } from "./s
 import { createOsmMap, updateOsmMap, resizeOsmMap, flashOsmDistrict, aqiColor, aqiBand, AQI_BANDS, OSM_ICONS } from "./osmmap.js";
 import { presidentOffice, decreeSeal, flagStripe } from "./art.js";
 import { icon, SEASON_ICON, WINTER_ICON, TASK_ICON, OBSTACLE_ICON, FEED_ICON } from "./icons.js";
+import { track } from "./track.js";
 import { DISTRICTS, PLANTS } from "./data/city.js";
 import { DISTRICT_ACTIONS, CITY_PROJECTS } from "./data/actions.js";
 import { SIM } from "./data/sim-balance.js";
@@ -1065,7 +1066,7 @@ function draw() {
   coach.frame();
   // окно по состоянию; пока открыто вступление, ни событий, ни отчётов ещё нет
   if (state.ended) {
-    if (dlg !== "end") { setSpeed(0); showDialog("end", final(state)); storageRemove(store); }
+    if (dlg !== "end") { setSpeed(0); showDialog("end", final(state)); storageRemove(store); track(`end/${state.ended}/year-${date(state).year}`); }
   } else if (dlg === "warning") {
     // ждём «Понятно»; отчёт или событие откроются следом
   } else if (state.pendingReport) {
@@ -1205,6 +1206,8 @@ function build(key, withLoan = false) {
   }
   if (!statusOf(s, kind, id).ok) return;
   state = kind === "n" ? startNmu(s) : kind === "c" ? cityProject(s, id) : act(s, selected, id);
+  if (loan) track(`loan/${loan}`);
+  track(`build/${kind === "n" ? "nmu" : id}`);
   const spent = prev.budget - state.budget;
   if (spent) floatDelta(hud.money, `${spent > 0 ? "−" : "+"}${Math.abs(spent)}`, spent < 0);
   const where = kind === "d" ? selected : CITY_SITE[id];
@@ -1281,6 +1284,7 @@ dialog.addEventListener("click", e => {
     if (dlg !== "loan" || !canPlay() || loan.disabled) return;
     const amount = Number(loan.dataset.loan);
     state = takeLoan(state, amount);
+    track(`loan/${amount}`);
     hideDialog();
     floatDelta(hud.money, `+${amount}`, true);
     const l = state.loans.at(-1);
@@ -1294,11 +1298,11 @@ dialog.addEventListener("click", e => {
   const a = b.dataset.act;
   if (a === "close-loan") { hideDialog(); draw(); }
   if (a === "ack") { hideDialog(); draw(); }
-  if (a === "start") { started = true; offered = null; storageRemove(store); hideDialog(); setSpeed(1); draw(); saveNow(); }
-  if (a === "continue" && offered) { restoreGame(offered); showToast(`Партия продолжена: ${whenText(state)}. Время на паузе`); }
+  if (a === "start") { track("start"); started = true; offered = null; storageRemove(store); hideDialog(); setSpeed(1); draw(); saveNow(); }
+  if (a === "continue" && offered) { track("continue"); restoreGame(offered); showToast(`Партия продолжена: ${whenText(state)}. Время на паузе`); }
   if (a === "restart") newGame();
   if (a === "report") { state = ackReport(state); hideDialog(); draw(); }
-  if (a === "decree") { state = acceptDecree(state); hideDialog(); draw(); }
+  if (a === "decree") { track(`decree/year-${state.pendingDecree.year}`); state = acceptDecree(state); hideDialog(); draw(); }
   if (a === "forecast") { state = ackForecast(state); hideDialog(); draw(); }
   if (a === "retire") { state = retire(state); hideDialog(); draw(); }
   if (a === "report" || a === "decree" || a === "forecast" || a === "retire" || a === "ack") saveNow();
