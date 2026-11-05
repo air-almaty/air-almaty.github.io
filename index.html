@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Аким Алматы</title>
+  <link rel="icon" href="data:,">
+  <meta name="theme-color" content="#0F172A">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Fira Sans не блокирует отрисовку: без сети остаётся системный шрифт -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fira+Sans:wght@400;500;600;700;800&amp;display=swap" media="print" onload="this.media='all'">
+  <link rel="stylesheet" href="src/vendor/leaflet/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="hud" id="hud" aria-label="Состояние города">
+    <div class="hud-date">
+      <span class="hud-ico season-ico" id="h-season-ico" aria-hidden="true"></span>
+      <b id="h-date">Год 1 · весна</b>
+      <small id="h-day"></small>
+      <span class="season-bar" aria-hidden="true"><i id="h-season"></i></span>
+    </div>
+    <div class="hud-stats">
+      <button class="stat money" id="h-money" aria-haspopup="dialog" title="Бюджет, млрд ₸. Нажмите, чтобы взять кредит">
+        <span class="stat-ico" data-icon="wallet" aria-hidden="true"></span>
+        <span class="stat-label">Бюджет<span class="lg">, млрд ₸</span></span>
+        <b id="h-budget">0</b>
+        <small id="h-income"></small>
+      </button>
+      <div class="stat rating" id="h-rating-box" title="Доверие горожан. Ниже 20 — вас снимут">
+        <span class="stat-ico" data-icon="handshake" aria-hidden="true"></span>
+        <small class="stat-label" id="h-rating-note">доверие горожан</small>
+        <b id="h-rating">0</b>
+        <span class="rbar" aria-hidden="true"><i id="h-rating-fill"></i><em class="fired"></em></span>
+      </div>
+      <div class="stat wind" title="Куда ветер сносит смог">
+        <span class="stat-ico" data-icon="wind" aria-hidden="true"></span>
+        <span class="stat-label">Ветер</span>
+        <b id="h-wind-arrow">•</b>
+        <small id="h-wind">штиль</small>
+      </div>
+    </div>
+    <div class="speed" role="group" aria-label="Скорость времени">
+      <button data-speed="0" aria-pressed="true" aria-label="Пауза" title="Пауза (пробел)"><span data-icon="pause"></span></button>
+      <button data-speed="1" aria-pressed="false" aria-label="Скорость ×1" title="×1 (клавиша 1)"><span data-icon="play"></span></button>
+      <button data-speed="3" aria-pressed="false" aria-label="Скорость ×3" title="×3 (клавиша 2)"><span data-icon="forward"></span></button>
+    </div>
+    <button class="hud-help" id="h-help" aria-expanded="false" aria-controls="hotkeys" title="Горячие клавиши (?)" aria-label="Горячие клавиши">?</button>
+    <div class="hotkeys" id="hotkeys" hidden>
+      <b>Клавиши</b>
+      <dl>
+        <dt><kbd>Пробел</kbd></dt><dd>пауза</dd>
+        <dt><kbd>1</kbd> <kbd>2</kbd></dt><dd>скорость ×1 и ×3</dd>
+        <dt><kbd>Q</kbd> <kbd>E</kbd></dt><dd>предыдущий и следующий район</dd>
+        <dt><kbd>B</kbd></dt><dd>к первой мере, которую можно начать</dd>
+        <dt><kbd>Esc</kbd></dt><dd>закрыть подсказку</dd>
+      </dl>
+    </div>
+    <div class="hud-row2">
+      <div class="air-gauge" id="h-gauge" data-level="ok" title="Средний AQI города за 30 дней. Черта — критическое состояние воздуха">
+        <div class="ag-head"><span class="ag-label">Воздух</span><span class="ag-val" id="h-avg">0</span><small>AQI за 30 дней</small></div>
+        <div class="ag-body">
+          <div class="ag-bar" id="h-bar" aria-hidden="true"><i class="ag-threshold" id="h-threshold"></i><i class="ag-mark" id="h-mark"></i></div>
+          <div class="ag-foot">
+            <p class="hud-air"><span class="dot" id="h-aqi-dot" aria-hidden="true"></span>сегодня AQI <b id="h-aqi">0</b> · <span id="h-air"></span></p>
+            <span class="ag-msg"><span class="ag-alert" data-icon="siren" aria-hidden="true"></span><span id="h-gauge-msg" role="status"></span></span>
+          </div>
+        </div>
+      </div>
+      <div class="hud-task" id="h-task">
+        <div class="hud-decree" id="h-decree" data-risk="wait" title="Указ президента на этот год. Не выполнен — сразу отставка">
+          <div class="dc-head"><span class="hud-ico" data-icon="scroll" aria-hidden="true"></span><b id="h-decree-title"></b><small id="h-decree-days"></small></div>
+          <span class="decree-tasks" id="h-decree-tasks"></span>
+        </div>
+        <div class="hud-idle" id="h-idle" data-urgency="calm" role="status" hidden><span class="hud-ico" data-icon="hourglass" aria-hidden="true"></span><b id="h-idle-text"></b><button id="h-idle-go">К мерам <span data-icon="arrow-right"></span></button></div>
+      </div>
+      <button class="hud-weather" id="h-weather" aria-expanded="false" aria-controls="h-weather-pop"><span class="hud-ico" id="h-weather-ico" aria-hidden="true"></span><span id="h-weather-short"></span></button>
+      <p class="weather-pop" id="h-weather-pop" hidden></p>
+    </div>
+  </header>
+  <main class="game" id="game">
+    <section class="map-col">
+      <div class="map-frame">
+        <div id="map" role="group" aria-label="Карта районов Алматы"></div>
+        <div class="paused-badge" aria-hidden="true"><span data-icon="pause"></span>пауза</div>
+        <div class="inversion-badge"><span data-icon="snowflake" aria-hidden="true"></span>Слой инверсии: горы и холод запирают смог в котловине</div>
+      </div>
+      <div class="under-map">
+        <h2 class="feed-title">Новости</h2>
+        <ul id="feed" class="feed" aria-live="polite" aria-label="Новости"></ul>
+      </div>
+    </section>
+    <aside class="panel" id="panel" aria-label="Меры и районы">
+      <button class="sheet-handle" id="sheet-handle" aria-expanded="false" aria-controls="panel-body"><span class="grip" aria-hidden="true"></span><b id="sheet-title"></b><span class="pill" id="sheet-aqi"></span><span class="sheet-more" id="sheet-more">Все меры</span></button>
+      <nav class="tabs" id="tabs" aria-label="Районы"></nav>
+      <div id="panel-body" class="panel-body" aria-live="off"></div>
+    </aside>
+  </main>
+  <div id="toast" class="toast"><span id="toast-text" role="status" aria-live="polite"></span><button id="toast-undo" hidden>Отменить</button></div>
+  <div id="coach" class="coach" role="note" aria-live="polite" hidden><p id="coach-text"></p><div class="coach-actions"><button id="coach-skip" class="coach-skip">Скрыть подсказки</button><button id="coach-next" class="coach-next">Далее</button></div></div>
+  <div id="overlay" class="overlay" hidden>
+    <div id="dialog" class="dialog" tabindex="-1" role="dialog" aria-modal="true" aria-labelledby="dlg-title"></div>
+  </div>
+  <script src="src/vendor/leaflet/leaflet.min.js"></script>
+  <script type="module" src="src/ui.js"></script>
+</body>
+</html>

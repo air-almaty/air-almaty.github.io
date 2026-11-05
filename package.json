@@ -1,0 +1,8 @@
+{
+  "name": "air-almaty",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node test/sim.mjs && node test/osmmap.mjs && node test/fx.mjs && node test/city-balance.mjs"
+  }
+}

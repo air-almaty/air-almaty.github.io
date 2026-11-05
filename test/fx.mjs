@@ -1,0 +1,34 @@
+import assert from "node:assert/strict";
+import { fxTargets, inBasin, metroPath, WIND, fxDpr } from "../src/fx.js";
+import { newCity } from "../src/sim.js";
+
+const s = newCity(1);
+const spring = fxTargets(s);
+assert.equal(spring.snow, 0, "весной снега нет");
+assert.equal(fxTargets({ ...s, day: 280 }).snow, 70, "зимой снег");
+const snow = winter => fxTargets({ ...s, day: 280, winter }).snow;
+assert.ok(snow("low-snow") < snow("normal") && snow("normal") < snow("snowy"), "малоснежная — меньше снега, снежная — больше");
+assert.equal(snow(null), 70, "до прогноза — обычная зима");
+const sum = o => Object.values(o).reduce((a, b) => a + b, 0);
+assert.ok(sum(fxTargets({ ...s, day: 280 }).stove) > sum(spring.stove), "зимой печи дымят сильнее");
+const dirty = { ...s, districts: s.districts.map(d => ({ ...d, smog: d.smog * 20 })) };
+assert.ok(sum(fxTargets(dirty).smog) > sum(spring.smog), "больше смога — больше частиц");
+assert.equal(fxTargets({ ...s, plants: s.plants.map(p => ({ ...p, mult: 0.15 })) }).plant.tec2.tone, "steam");
+assert.deepEqual(WIND.calm, [0, 0]);
+assert.ok(inBasin([76.93, 43.26]), "центр города в котловине");
+assert.ok(!inBasin([77.1, 43.09]), "пик Абая — хребет, смога нет");
+assert.equal(spring.metro, "none");
+assert.equal(fxTargets({ ...s, cityDone: ["metro"] }).metro, "done");
+assert.equal(fxTargets({ ...s, building: [{ kind: "city", id: "metro", left: 10, days: 360 }] }).metro, "building");
+assert.ok(Object.values(spring.cars).every(n => n >= 1), "в каждом районе есть машины");
+const busy = { ...s, districts: s.districts.map(d => ({ ...d, traffic: d.traffic * 3 })) };
+assert.ok(sum(fxTargets(busy).cars) > sum(spring.cars), "больше трафика — больше машин");
+const path = metroPath();
+assert.match(path[0].name, /Райымбек/);
+assert.equal(new Set(path.map(x => x.name)).size, path.length, "станции без повторов");
+// холст: на большом экране — 1 пиксель на точку, на телефоне — не больше 1,5
+assert.equal(fxDpr(2, 1440), 1);
+assert.equal(fxDpr(3, 400), 1.5);
+assert.equal(fxDpr(1, 800), 1);
+assert.equal(fxDpr(undefined, 800), 1);
+console.log("fx ok");
