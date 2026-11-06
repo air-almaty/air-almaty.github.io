@@ -314,6 +314,7 @@ export const MOUNTAIN_STYLE = {
 const RANGE_LABEL = { wide: [43.09, 76.72], small: [43.07, 77.0], angle: -3, text: "Заилийский Алатау" };
 
 const BUBBLE_PX = { wide: [38, 26], small: [30, 21] }; // [район, датчик]
+const TOUCH_HIT_PX = 44; // палец: кружок района рисуется мельче, а нажимается квадрат 44×44
 const SMALL_WIDTH = 480; // уже этого — телефон: кружки мельче, город крупнее, легенда свёрнута
 const CORE_LAT = 43.12; // на телефоне южные горы за кадром, чтобы центр не слипался
 
@@ -324,25 +325,35 @@ const districtStyle = (aqi, selected) => ({
 });
 
 // Создать карту в контейнере. onSelect(id) — клик по району, его кружку или датчику.
-export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILES } = {}) {
+// padBottom и padRight — сколько пикселей снизу и справа закрыто (шторка на телефоне): город вписывается в остальное.
+export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILES, padBottom = 0, padRight = 0 } = {}) {
   const L = globalThis.L;
   if (!L) throw new Error("osmmap: Leaflet (глобальный L) не загружен");
   injectCss();
   const reduce = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+  // Палец: двойное нажатие не приближает (районы нажимают часто и подряд), кружок района нажимается квадратом 44×44,
+  // а мелкие датчики не ловят нажатие — оно уходит району под ними. Приближение — двумя пальцами и кнопками.
+  const coarse = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+
   const small = container.clientWidth < SMALL_WIDTH;
   const [mainPx, sensorPx] = small ? BUBBLE_PX.small : BUBBLE_PX.wide;
   container.classList.add("om-root");
   container.classList.toggle("om-small", small);
 
   const cityBounds = L.geoJSON(DISTRICTS_GEO).getBounds();
-  const outer = cityBounds.pad(0.35);
+  // на телефоне карта выше, чем город на этом масштабе: запас по краям, чтобы её можно было двигать и вверх-вниз
+  // и снизу: район, закрытый шторкой, можно поднять над ней
+  const roomy = small || coarse;
+  const outer = cityBounds.pad(roomy ? 0.8 : 0.35);
   for (const p of Object.values(PLANT_COORDS)) outer.extend(p);
+  if (roomy) outer.extend([cityBounds.getSouth() - 0.5, cityBounds.getWest()]).extend([cityBounds.getNorth(), cityBounds.getEast() + 0.6]); // и вправо: боком шторка справа
 
   const map = L.map(container, {
     center: [43.24, 76.92], zoom: 11, minZoom: 9.5, maxZoom: 16,
     maxBounds: outer, maxBoundsViscosity: 0.8,
     zoomSnap: 0.25, zoomDelta: 0.5, wheelPxPerZoomLevel: 90,
     zoomAnimation: !reduce, fadeAnimation: !reduce, markerZoomAnimation: !reduce,
+    doubleClickZoom: !coarse,
   });
   map.attributionControl.setPrefix(false);
   const tiles = L.tileLayer(tileSource.url, tileSource.options).addTo(map);
@@ -355,7 +366,7 @@ export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILE
   tiles.on("tileload", () => { if (tileErrors) { tileErrors = 0; container.classList.remove("om-offline"); } });
 
   const select = id => onSelect && onSelect(id);
-  const h = { map, L, d: {}, plants: {}, sites: {}, day: undefined, tileBase: tileSource.filter, tileCss: null, placed: false, mainPx, sensorPx };
+  const h = { map, L, d: {}, plants: {}, sites: {}, day: undefined, tileBase: tileSource.filter, tileCss: null, placed: false, mainPx, sensorPx, reduce };
 
   const paneLabels = map.createPane("om-labels");
   paneLabels.style.zIndex = 620;
@@ -385,13 +396,17 @@ export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILE
     layer.on("click", () => select(id));
     const [lon, lat] = labelPoint(f);
     const center = [lat, lon];
-    const bubIcon = (cls, px) => L.divIcon({ className: `om-${cls}-icon`, html: `<div class="om-bub ${cls}">–</div>`, iconSize: [px, px], iconAnchor: [px / 2, px / 2] });
-    const main = L.marker(center, { icon: bubIcon("main", mainPx), title: name, alt: name, zIndexOffset: 1000, riseOnHover: true }).addTo(map);
+    const bubIcon = (cls, px, hit = px) => L.divIcon({
+      className: `om-${cls}-icon`,
+      html: `<div class="om-bub ${cls}"${hit > px ? ` style="width:${px}px;height:${px}px;margin:${(hit - px) / 2}px"` : ""}>–</div>`,
+      iconSize: [hit, hit], iconAnchor: [hit / 2, hit / 2],
+    });
+    const main = L.marker(center, { icon: bubIcon("main", mainPx, coarse ? Math.max(TOUCH_HIT_PX, mainPx) : mainPx), title: name, alt: name, zIndexOffset: 1000, riseOnHover: true }).addTo(map);
     main.on("click", () => select(id));
     main.on("keypress", e => { if (e.originalEvent.key === "Enter" || e.originalEvent.key === " ") select(id); });
     const sensors = sensorPoints(f, [lon, lat]).map(([x, y]) => {
-      const m = L.marker([y, x], { icon: bubIcon("sensor", sensorPx), keyboard: false, title: `${name}: датчик (модель)` }).addTo(map);
-      m.on("click", () => select(id));
+      const m = L.marker([y, x], { icon: bubIcon("sensor", sensorPx), keyboard: false, interactive: !coarse, title: `${name}: датчик (модель)` }).addTo(map);
+      if (!coarse) m.on("click", () => select(id));
       return m;
     });
     const ex = L.marker(center, {
@@ -419,7 +434,7 @@ export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILE
   const legend = L.control({ position: "topright" });
   legend.onAdd = () => {
     const div = L.DomUtil.create("div", "om-legend");
-    const open = small ? "" : "open";
+    const open = small || coarse ? "" : "open"; // палец: легенда свёрнута, не закрывает карту
     div.innerHTML = `<details ${open}><summary>US AQI</summary>${AQI_BANDS.map((b, i) =>
       `<div class="row"><span class="sw" style="background:${b.color}"></span>${i ? AQI_BANDS[i - 1].max + 1 : 0}${b.max === Infinity ? "+" : "–" + b.max} ${b.label}</div>`).join("")}
       <div class="row"><span class="sws">${Object.values(MOUNTAIN_STYLE).map(m => `<span class="sw" style="background:${m.fillColor}"></span>`).join("")}</span>Горы: предгорья, хребет, снега</div>
@@ -434,7 +449,7 @@ export function createOsmMap(container, { onSelect, tiles: tileSource = OSM_TILE
     ? L.latLngBounds([CORE_LAT, cityBounds.getWest()], [cityBounds.getNorth(), cityBounds.getEast()])
     : L.latLngBounds(cityBounds.getSouthWest(), cityBounds.getNorthEast());
   for (const p of Object.values(PLANT_COORDS)) fit.extend(p); // ТЭЦ-3 за городом, но на карте нужна
-  map.fitBounds(fit, { paddingTopLeft: [6, 34], paddingBottomRight: [6, 6], animate: false });
+  map.fitBounds(fit, { paddingTopLeft: [6, 34], paddingBottomRight: [6 + padRight, 6 + padBottom], animate: false });
   if (small) {
     // Узкая карта упирается в ширину: прижимаем город к верху, чтобы снизу в кадр вошли горы.
     const z = map.getZoom();
@@ -622,6 +637,13 @@ export function flashOsmDistrict(h, id) {
     void el.getBoundingClientRect();
     el.classList.add("om-flash");
   });
+}
+
+// Сдвинуть карту так, чтобы кружок района был виден, если низ карты закрыт (шторка на телефоне) на padBottom px.
+export function revealOsmDistrict(h, id, padBottom = 0) {
+  const d = h.d[id];
+  if (!d) return;
+  h.map.panInside(d.main.getLatLng(), { paddingTopLeft: [48, 48], paddingBottomRight: [48, padBottom + 48], animate: !h.reduce });
 }
 
 // Пересчитать размер (после смены раскладки) и убрать карту

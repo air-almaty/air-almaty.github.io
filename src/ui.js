@@ -11,7 +11,7 @@ import {
 } from "./sim.js";
 import { createFx } from "./fx.js";
 import { serialize, loadSave, restoreMode, storageSet, storageRemove } from "./save.js";
-import { createOsmMap, updateOsmMap, resizeOsmMap, flashOsmDistrict, aqiColor, aqiBand, AQI_BANDS, OSM_ICONS } from "./osmmap.js";
+import { createOsmMap, updateOsmMap, resizeOsmMap, flashOsmDistrict, revealOsmDistrict, aqiColor, aqiBand, AQI_BANDS, OSM_ICONS } from "./osmmap.js";
 import { presidentOffice, decreeSeal, flagStripe } from "./art.js";
 import { icon, SEASON_ICON, WINTER_ICON, TASK_ICON, OBSTACLE_ICON, FEED_ICON } from "./icons.js";
 import { track } from "./track.js";
@@ -293,12 +293,132 @@ function drawHud() {
   }
   // ожидание президента — часть задачи года: та же плашка, только срочнее
   hud.task.dataset.idle = hud.idle.hidden ? "" : hud.idle.dataset.urgency;
+  if (isMobile()) drawMobileHud();
+}
+
+// --- HUD телефона: два ряда. Первый — год, бюджет, доверие, воздух, скорость; второй — задача года одной строкой.
+// Нажатие на задачу раскрывает подробности: указ целиком, ожидание президента, воздух, бюджет, доверие, зима, ветер.
+const mh = {
+  season: $("m-season"), year: $("m-year"), days: $("m-days"), money: $("m-money"), budget: $("m-budget"), income: $("m-income"),
+  trust: $("m-trust"), rating: $("m-rating"), ratingNote: $("m-rating-note"), ratingFill: $("m-rating-fill"), aqi: $("m-aqi"), aqiVal: $("m-aqi-val"),
+  speed: $("m-speed"), speedIco: $("m-speed-ico"), speedTxt: $("m-speed-txt"),
+  task: $("m-task"), taskIco: $("m-task-ico"), taskText: $("m-task-text"), crit: $("m-crit"), critTxt: $("m-crit-txt"), idle: $("m-idle"), idleTxt: $("m-idle-txt"),
+  details: $("m-details"), decree: $("md-decree"), decreeTitle: $("md-decree-title"), decreeDays: $("md-decree-days"), tasks: $("md-tasks"),
+  dIdle: $("md-idle"), dIdleText: $("md-idle-text"), air: $("md-air"), dMoney: $("md-money"), dTrust: $("md-trust"), weather: $("md-weather"), wind: $("md-wind"),
+};
+const mobileMq = matchMedia("(max-width: 899px)");
+const isMobile = () => mobileMq.matches;
+const moneyBtn = () => (isMobile() ? mh.money : hud.money);
+
+// Задача указа совсем коротко: строка HUD телефона. Полный текст — в подробностях.
+function shortTask(t) {
+  if (t.kind === "winter") return t.value !== null ? `Зима: AQI ${Math.round(t.value)} / <${t.target}` : `Прогноз зимы ≈${Math.round(t.forecast)} / <${t.target}`;
+  if (t.kind === "stoves") return `Печей меньше: ${Math.round(t.value * 100)}% / ${Math.round(t.target * 100)}%`;
+  if (t.kind === "tec2") return t.state === "done" ? "ТЭЦ-2: перевод начат ✓" : `ТЭЦ-2: начать, ${daysWord(t.daysLeft)}`;
+  return t.value === null ? `Дней выше ${t.target}: ни одного` : `Худший день ${Math.round(t.value)} / черта ${t.target}`;
+}
+const TASK_RANK = { bad: 0, risk: 1, done: 3 };
+
+function drawMobileHud() {
+  const d = date(state);
+  put(mh.year, `Год ${d.gameYear}`);
+  put(mh.days, `${d.yearDaysLeft} дн.`);
+  putIcon(mh.season, SEASON_ICON[d.season], 18);
+  const seasonLabel = `${SEASON_RU[d.season]}, до конца года ${d.yearDaysLeft} дн.`;
+  if (mh.season.getAttribute("aria-label") !== seasonLabel) mh.season.setAttribute("aria-label", seasonLabel);
+  // бюджет: в долгу — красным и сколько дней в минусе
+  put(mh.budget, fmtMoney(state.budget));
+  put(mh.income, state.debtDays ? `${state.debtDays}/${SIM.debtDaysLimit} дн` : `${netIncome(state) >= 0 ? "+" : "−"}${comma(Math.abs(netIncome(state)).toFixed(1))}`);
+  mh.money.classList.toggle("debt", state.budget < 0);
+  mh.income.classList.toggle("neg", netIncome(state) < 0);
+  const moneyLabel = `Бюджет ${fmtMoney(state.budget)} млрд ₸, ${hud.income.textContent.replace(/\.$/, "")}. Нажмите, чтобы взять кредит`;
+  if (mh.money.getAttribute("aria-label") !== moneyLabel) mh.money.setAttribute("aria-label", moneyLabel);
+  // доверие: черта снятия на полосе, у черты — красным
+  const r = Math.round(rating(state));
+  put(mh.rating, r);
+  put(mh.ratingNote, r < SIM.firedRating + 10 ? `доверие, снимут ниже ${SIM.firedRating}` : "доверие");
+  mh.ratingFill.style.width = `${r}%`;
+  mh.trust.classList.toggle("danger", r < SIM.firedRating + 10);
+  mh.trust.classList.toggle("warn", r < SIM.firedRating + 20);
+  // воздух: средний AQI за 30 дней, как шкала «Воздух» на большом экране; критическое состояние — тревогой
+  const a = airStatus(state);
+  const avg = Math.round(a.avg30), band = aqiBand(avg);
+  put(mh.aqiVal, avg);
+  mh.aqi.style.background = band.color;
+  mh.aqi.style.color = band.ink;
+  mh.aqi.dataset.level = a.level;
+  mh.aqi.title = `Средний AQI города за 30 дней: ${avg}. ${gaugeMessage(a)}`;
+  // задача года: самая рискованная из задач указа, цветом — риск
+  const dc = decreeNow();
+  if (dc) {
+    const tasks = [...dc.tasks].sort((x, y) => (TASK_RANK[x.state] ?? 2) - (TASK_RANK[y.state] ?? 2));
+    put(mh.taskText, `${shortTask(tasks[0])}${tasks.length > 1 ? ` · ещё ${tasks.length - 1}` : ""}`);
+    putIcon(mh.taskIco, TASK_ICON[tasks[0].kind], 18);
+    mh.task.dataset.risk = dc.risk;
+    mh.decree.dataset.risk = dc.risk;
+    put(mh.decreeTitle, `Указ · год ${dc.year}`);
+    put(mh.decreeDays, `до проверки ${daysWord(dc.daysLeft)}`);
+    const key = dc.tasks.map(t => `${t.state}|${taskLine(t)}`).join("||");
+    if (shown.get(mh.tasks) !== key) {
+      shown.set(mh.tasks, key);
+      mh.tasks.replaceChildren(...dc.tasks.map(t => {
+        const li = document.createElement("li");
+        li.dataset.state = t.state;
+        li.innerHTML = icon(TASK_ICON[t.kind], { size: 18 });
+        const tx = document.createElement("span");
+        tx.textContent = taskLine(t);
+        if (t.kind === "winter" && t.value === null) { const sm = document.createElement("small"); sm.textContent = FORECAST_TIP; tx.append(sm); }
+        li.append(tx);
+        return li;
+      }));
+    }
+  }
+  // тревоги не прячем: отсчёт критического воздуха и ожидание президента — значками в строке задачи
+  mh.crit.hidden = a.level !== "critical";
+  if (!mh.crit.hidden) put(mh.critTxt, `${a.countdown} дн.`);
+  const idle = idleStatus(state);
+  const idleOn = !!idle && idle.done < idle.needed;
+  mh.idle.hidden = !idleOn;
+  mh.dIdle.hidden = !idleOn;
+  if (idleOn) {
+    const left = idle.deadlineDay - state.day;
+    const urgency = left <= 30 ? "last" : left <= 75 ? "soon" : "calm";
+    put(mh.idleTxt, `${left} дн.`);
+    put(mh.dIdleText, `Президент ждёт действий: ${left} дн. Начните любую меру для воздуха.`);
+    mh.idle.dataset.urgency = urgency;
+    mh.dIdle.dataset.urgency = urgency;
+  }
+  const taskLabel = `${mh.taskText.textContent}${idleOn ? `. Президент ждёт действий: ${mh.idleTxt.textContent}` : ""}${a.level === "critical" ? `. ${gaugeMessage(a)}` : ""}. Подробности`;
+  if (mh.task.getAttribute("aria-label") !== taskLabel) mh.task.setAttribute("aria-label", taskLabel);
+  // подробности: обновляются, только пока открыты
+  if (mh.details.hidden) return;
+  put(mh.air, `${avg} в среднем за 30 дней · ${gaugeMessage(a)}. Сегодня AQI ${Math.round(cityAqi(state))}, ${airLine(cityPm25(state))}`);
+  mh.air.classList.toggle("bad", a.level === "critical");
+  put(mh.dMoney, `${fmtMoney(state.budget)} млрд ₸, ${hud.income.textContent.replace(/\.$/, "")}. Нажмите на бюджет, чтобы взять кредит`);
+  mh.dMoney.classList.toggle("bad", state.budget < 0);
+  const drains = trustDrains(state).slice(0, 2).map(x => DRAIN_RU[x.key]);
+  put(mh.dTrust, `${r}. Ниже ${SIM.firedRating} — вас снимут.${drains.length ? ` Съедает: ${drains.join(", ")}.` : ""}`);
+  mh.dTrust.classList.toggle("bad", r < SIM.firedRating + 10);
+  put(mh.weather, hud.weatherPop.textContent);
+  const [arrow, word] = WIND[state.wind];
+  put(mh.wind, `${arrow} ${word}`);
+}
+
+// Одна кнопка скорости на телефоне: пауза → ×1 → ×3 → пауза. Подпись — что сейчас и что будет по нажатию.
+function drawSpeedBtn() {
+  const name = v => (v === 0 ? "пауза" : `×${v}`);
+  const next = speed === 0 ? 1 : speed === 1 ? 3 : 0;
+  putIcon(mh.speedIco, speed === 0 ? "pause" : speed === 1 ? "play" : "forward", 20);
+  put(mh.speedTxt, name(speed));
+  mh.speed.dataset.now = String(speed);
+  mh.speed.setAttribute("aria-label", `Скорость: ${name(speed)}. Нажмите — ${name(next)}`);
 }
 
 function setSpeed(v) {
   if (v > 0) lastSpeed = v;
   speed = v;
   for (const b of document.querySelectorAll("[data-speed]")) b.setAttribute("aria-pressed", String(Number(b.dataset.speed) === v));
+  drawSpeedBtn();
   document.body.classList.toggle("paused", v === 0 && started && !state.ended);
   invalidate();
 }
@@ -317,7 +437,10 @@ function floatDelta(el, text, good) {
 // --- панели ---
 // Порядок панели: короткая шапка района → стройки → меры (сначала то, что можно начать) → «О районе» свёрнуто.
 const TAB_IDS = [...DISTRICTS.map(d => d.id), "city"];
-const isMobile = () => matchMedia("(max-width: 899px)").matches;
+// Телефон: шторка показывает одно из — меры, сведения о районе, новости. «Город» — это selected === "city".
+let sheetView = "measures"; // "measures" | "district" | "news"
+let lastDistrict = selected; // к нему возвращают «Меры» и «Район» из «Города» и стрелки шторки
+const panelView = () => (!isMobile() ? "all" : selected === "city" ? "city" : sheetView === "district" ? "district" : "measures");
 
 function tabsHtml() {
   const chip = (id, label, dot) => `<button class="chip" data-tab="${id}" aria-pressed="${selected === id}">${dot}${label}</button>`;
@@ -326,6 +449,9 @@ function tabsHtml() {
 
 // Подпись структуры панели: меняется, когда меняется доступность кнопок, — тогда панель пересобирается.
 function panelKey() {
+  return `${panelView()}#${panelKeyBase()}`;
+}
+function panelKeyBase() {
   const sites = sitesHere().map(b => `${b.id}${b.approval > 0 ? "a" : ""}`).join(",");
   const sub = selected !== "city" && state.districts.find(x => x.id === selected).done.includes("gas-subsidy") ? "s" : "";
   // кнопка «В кредит» появляется и пропадает вместе с подходящим кредитом
@@ -515,9 +641,21 @@ function measuresHtml(list, title, extra = "") {
   </section>`;
 }
 
-function districtPanel(id) {
+// view: "all" — большой экран; на телефоне шторка показывает либо меры ("measures"), либо сведения о районе ("district").
+function districtPanel(id, view = "all") {
   const d = DISTRICTS.find(x => x.id === id);
   const sd = state.districts.find(x => x.id === id);
+  const status = `<p class="status" hidden><span class="st-ico"></span><span data-f="status"></span></p>`;
+  const subsidy = sd.done.includes("gas-subsidy") ? `<p class="subsidy">${icon(OSM_ICONS["gas-subsidy"], { size: 14 })}Субсидия на газ действует <button class="cancel" data-cancel>Отменить субсидию</button></p>` : "";
+  if (view === "measures") return `${status}${sitesHtml()}${subsidy}${measuresHtml(districtItems(id), "Меры района", cityLinkHtml())}`;
+  if (view === "district") {
+    return `<div class="phead"><h2>${d.name} район</h2><span class="pill" data-f="aqi">AQI</span>
+      <span class="mood-chip" data-f="moodchip" title="Настроение района">${icon("smile", { size: 14 })}настроение <b data-f="mood"></b></span></div>
+    <p class="pmini"><span title="Печи на угле">${icon("flame", { size: 14 })}печи <b data-f="stoves"></b></span><span title="Трафик">${icon("car", { size: 14 })}машины <b data-f="traffic"></b></span><span title="Население">${icon("users", { size: 14 })}<b data-f="pop"></b> тыс.</span></p>
+    ${status}
+    <p class="sources"><span data-f="air"></span><br>Откуда смог сегодня: <b data-f="src"></b></p>
+    <p class="wind-geo">${icon("wind")}<span>${windGeo(id)}</span></p>`;
+  }
   return `<div class="phead"><h2>${d.name} район</h2><span class="pill" data-f="aqi">AQI</span>
       <span class="mood-chip" data-f="moodchip" title="Настроение района">${icon("smile", { size: 14 })}<b data-f="mood"></b></span></div>
     <p class="pmini"><span title="Печи на угле">${icon("flame", { size: 14 })}печи <b data-f="stoves"></b></span><span title="Трафик">${icon("car", { size: 14 })}машины <b data-f="traffic"></b></span><span title="Население">${icon("users", { size: 14 })}<b data-f="pop"></b> тыс.</span></p>
@@ -562,7 +700,7 @@ function drawPanel() {
   const key = panelKey();
   if (key !== panelShown) {
     const fid = document.activeElement?.closest?.("#panel-body [data-fid]")?.dataset.fid;
-    panel.innerHTML = selected === "city" ? cityPanel() : districtPanel(selected);
+    panel.innerHTML = selected === "city" ? cityPanel() : districtPanel(selected, panelView());
     panelShown = key;
     if (fid) panel.querySelector(`[data-fid="${fid}"]`)?.focus({ preventScroll: true });
   }
@@ -570,11 +708,17 @@ function drawPanel() {
   const aqi = Math.round(selected === "city" ? cityAqi(state) : districtAqi(state, selected));
   const band = aqiBand(aqi);
   for (const pill of [panel.querySelector('[data-f="aqi"]'), $("sheet-aqi")]) {
+    if (!pill) continue;
     put(pill, `AQI ${aqi}`);
     pill.style.background = band.color;
     pill.style.color = band.ink;
   }
-  put($("sheet-title"), selected === "city" ? "Город" : `${DISTRICTS.find(d => d.id === selected).name} район`);
+  // шапка шторки (телефон): название без слова «район» — рядом стрелки и AQI
+  const name = selected === "city" ? "Город" : DISTRICTS.find(d => d.id === selected).name;
+  put($("sheet-title"), name);
+  const handleLabel = `${selected === "city" ? "Город" : `${name} район`}, AQI ${aqi}. ${sheet === "peek" ? "Раскрыть шторку" : "Свернуть шторку"}`;
+  if (sheetHandle.getAttribute("aria-label") !== handleLabel) sheetHandle.setAttribute("aria-label", handleLabel);
+  drawSheetTabs();
   put(panel.querySelector('[data-f="air"]'), airLine(selected === "city" ? cityPm25(state) : districtPm25(state, selected)));
   if (selected === "city") {
     for (const p of PLANTS) put(panel.querySelector(`[data-plant="${p.id}"]`), FUEL_RU[plantFuel(state, p.id)]);
@@ -585,18 +729,22 @@ function drawPanel() {
     put(panel.querySelector('[data-f="traffic"]'), sd.traffic.toFixed(1));
     put(panel.querySelector('[data-f="pop"]'), Math.round(sd.pop * 10));
     const stEl = panel.querySelector('[data-f="status"]');
-    const stBox = stEl.closest(".status");
     const dst = districtStatus(state, selected);
     const text = statusText(dst);
-    stBox.hidden = !text;
-    stBox.classList.toggle("strike", dst.strike);
-    putIcon(stBox.querySelector(".st-ico"), dst.strike ? "fist" : "frown");
-    put(stEl, text);
+    if (stEl) {
+      const stBox = stEl.closest(".status");
+      stBox.hidden = !text;
+      stBox.classList.toggle("strike", dst.strike);
+      putIcon(stBox.querySelector(".st-ico"), dst.strike ? "fist" : "frown");
+      put(stEl, text);
+    }
     // недовольство видно и в свёрнутом виде: настроение красным, причина — в подсказке
     const chip = panel.querySelector('[data-f="moodchip"]');
-    chip.classList.toggle("bad", dst.protest || dst.strike);
-    const tip = text || "Настроение района";
-    if (chip.title !== tip) chip.title = tip;
+    if (chip) {
+      chip.classList.toggle("bad", dst.protest || dst.strike);
+      const tip = text || "Настроение района";
+      if (chip.title !== tip) chip.title = tip;
+    }
     const e = districtEmission(state, selected);
     const sum = e.stoves + e.traffic + e.plant || 1;
     const pc = v => Math.round((v / sum) * 100);
@@ -642,18 +790,83 @@ function drawTabs() {
 }
 
 // --- нижняя шторка (телефон) ---
-function setSheet(open) {
-  document.body.classList.toggle("sheet-open", open);
-  sheetHandle.setAttribute("aria-expanded", String(open));
-  put($("sheet-more"), open ? "Свернуть" : "Все меры");
-  if (!open) panel.scrollTop = 0;
+// Три положения: "peek" — район, AQI и две первые меры; "half" — полэкрана; "full" — до HUD.
+// Ручку тянут пальцем (шторка идёт за пальцем и встаёт в ближайшее положение, быстрый взмах — на шаг),
+// нажатие на ручку — свернуть или раскрыть наполовину, кнопка-стрелка — во весь экран и обратно. «Назад» в браузере сворачивает.
+const SNAP = ["peek", "half", "full"];
+let sheet = "peek";
+let peekH = 0; // высота свёрнутой шторки, px: её задаёт CSS, замеряем
+const newsBody = $("news-body");
+const mapCol = document.querySelector(".map-col");
+const sizeBtn = $("sheet-size");
+const sheetTabs = $("sheet-tabs");
+const hudH = () => $("hud").offsetHeight;
+const fullPx = () => innerHeight - hudH() - 8;
+const halfPx = () => Math.min(fullPx(), Math.round(innerHeight * (innerHeight <= 500 ? 0.6 : 0.5)));
+const sheetOpen = () => sheet !== "peek";
+
+function setSheet(s, { fromHistory = false } = {}) {
+  if (!SNAP.includes(s)) s = "peek";
+  const was = sheet;
+  sheet = s;
+  document.body.dataset.sheet = s;
+  document.body.classList.toggle("sheet-open", s !== "peek");
+  aside.style.height = "";
+  sheetHandle.setAttribute("aria-expanded", String(s !== "peek"));
+  sizeBtn.setAttribute("aria-expanded", String(s === "full"));
+  sizeBtn.setAttribute("aria-label", s === "full" ? "Свернуть шторку" : "Раскрыть шторку во весь экран");
+  putIcon($("sheet-size-ico"), s === "full" ? "chevron-down" : "chevron-up", 22);
+  if (s === "peek") {
+    panel.scrollTop = 0;
+    newsBody.scrollTop = 0;
+    // свёрнутая шторка всегда показывает меры
+    if (sheetView !== "measures") { sheetView = "measures"; panelShown = null; }
+  }
+  // «Назад» на телефоне: раскрытая шторка — одна запись в истории, назад её сворачивает
+  if (isMobile()) {
+    if (s !== "peek" && was === "peek" && !history.state?.akimSheet) history.pushState({ akimSheet: true }, "");
+    if (s === "peek" && was !== "peek" && history.state?.akimSheet && !fromHistory) history.back();
+  }
+  invalidate();
 }
-const sheetOpen = () => document.body.classList.contains("sheet-open");
+
+// Вкладки шторки: aria-selected по выбранному виду. Новости с непрочитанным — точкой.
+function drawSheetTabs() {
+  const v = sheetView === "news" ? "news" : selected === "city" ? "city" : sheetView;
+  aside.dataset.view = v;
+  for (const b of sheetTabs.querySelectorAll("[data-view]")) {
+    const on = b.dataset.view === v;
+    if (b.getAttribute("aria-selected") !== String(on)) { b.setAttribute("aria-selected", String(on)); b.tabIndex = on ? 0 : -1; }
+  }
+}
+
+function setSheetView(v) {
+  if (v === "city") { sheetView = "measures"; if (selected !== "city") select("city", "tab"); }
+  else {
+    sheetView = v;
+    if (v === "news") { delete $("st-news").dataset.new; $("st-news").removeAttribute("aria-label"); }
+    else if (selected === "city") select(lastDistrict, "tab");
+  }
+  panelShown = null;
+  drawPanel();
+  panel.scrollTop = 0;
+  newsBody.scrollTop = 0;
+  if (sheet === "peek") setSheet("half");
+  invalidate();
+}
+
+// Лента: на телефоне — вкладка «Новости» в шторке, на большом экране — под картой.
+function placeFeed() {
+  const host = isMobile() ? aside : mapCol;
+  if (newsBody.parentElement !== host) host.append(newsBody);
+}
 
 // Выбрать вкладку. from: "map" | "tab" | "key" — после выбора меры видны сразу: панель — к началу, шторка — к мерам.
 function select(id, from) {
   const changed = id !== selected;
   selected = id;
+  if (id !== "city") lastDistrict = id;
+  else if (sheetView === "district") sheetView = "measures";
   if (changed) expanded = null;
   for (const c of tabs.querySelectorAll(".chip")) c.setAttribute("aria-pressed", String(c.dataset.tab === id));
   panelShown = null;
@@ -666,6 +879,12 @@ function select(id, from) {
     aside.scrollTop = 0;
     panel.scrollTop = 0;
     if (isMobile()) {
+      // район с карты: шторка раскрывается наполовину, а район сдвигается в видимую часть карты над ней
+      if (from === "map") {
+        if (sheetView === "news") { sheetView = "measures"; panelShown = null; drawPanel(); }
+        if (sheet === "peek") setSheet("half");
+        if (id !== "city") revealOsmDistrict(osm, id, sheet === "full" ? fullPx() : halfPx());
+      }
       sheetHandle.classList.remove("pulse");
       void sheetHandle.offsetWidth;
       sheetHandle.classList.add("pulse");
@@ -715,7 +934,10 @@ function drawFeed() {
     if (row) row.n++;
     else { const r = { e, n: 1 }; byText.set(e.text, r); rows.push(r); }
   }
-  rows.length = Math.min(rows.length, 4);
+  rows.length = Math.min(rows.length, isMobile() ? 12 : 4);
+  // на телефоне лента во вкладке: новое, пока вкладка не открыта, — точкой на «Новостях»
+  const newsTab = $("st-news");
+  if (fresh && isMobile() && (sheetView !== "news" || sheet === "peek")) { newsTab.dataset.new = "1"; newsTab.setAttribute("aria-label", "Новости, есть новые"); }
   feed.replaceChildren(...rows.map(({ e, n }, i) => {
     const li = document.createElement("li");
     li.className = [`k-${e.kind}`, i === 0 && fresh ? "new" : ""].join(" ");
@@ -731,6 +953,9 @@ function drawFeed() {
 // --- оверлеи ---
 function showDialog(kind, html) {
   dlg = kind;
+  // подробности задачи года (телефон) под окном не оставляем
+  mh.details.hidden = true;
+  mh.task.setAttribute("aria-expanded", "false");
   dialog.innerHTML = html;
   overlay.hidden = false;
   for (const el of page) el.inert = true;
@@ -748,7 +973,7 @@ function hideDialog() {
   overlay.hidden = true;
   for (const el of page) el.inert = false;
   document.body.classList.remove("modal");
-  if (was === "loan") hud.money.focus(); // фокус — туда, откуда открыли
+  if (was === "loan") moneyBtn().focus(); // фокус — туда, откуда открыли
 }
 
 // Кредит: долг сейчас, три предложения банка и предупреждение про минус. Время стоит, пока окно открыто.
@@ -766,7 +991,7 @@ function loanDialog() {
     <p class="loan-note">${INCOME_NOTE}</p>
     <div class="options">${options}</div>
     <p class="loan-warn">${icon("alert")}<span>Деньги сразу, а платежи — каждый день ${L.days} дней, и они могут увести бюджет в минус. ${SIM.debtDaysLimit} дней в минусе — внешнее управление.</span></p>
-    <button class="secondary" data-act="close-loan">Закрыть</button>`;
+    <div class="dlg-actions"><button class="secondary" data-act="close-loan">Закрыть</button></div>`;
 }
 
 function openLoan() {
@@ -803,8 +1028,8 @@ function intro(saved = null) {
       <li>${icon("play")}<span>Кнопки наверху — скорость времени, пробел — пауза. Остальные клавиши — под «?».</span></li>
     </ul>
     </details>
-    ${saved ? `<button class="primary" data-act="continue">Продолжить партию (${whenText(saved.state)})</button>
-    <button class="secondary" data-act="start">Новая партия</button>` : `<button class="primary" data-act="start">Принять дела</button>`}`;
+    <div class="dlg-actions">${saved ? `<button class="primary" data-act="continue">Продолжить партию (${whenText(saved.state)})</button>
+    <button class="secondary" data-act="start">Новая партия</button>` : `<button class="primary" data-act="start">Принять дела</button>`}</div>`;
 }
 
 const itemName = id => { const n = (getAction(id) ?? getProject(id)).name; return /^[А-Я][а-я]/.test(n) && !/^ТЭЦ/.test(n) ? n[0].toLowerCase() + n.slice(1) : n; };
@@ -821,7 +1046,7 @@ function decreeDialog(s) {
     <h3>Преграды года</h3>
     <ul class="obstacles">${obstacles}</ul>
     ${d.unlocks.length ? `<p class="unlocks">${icon("unlock")}<span>Указом разрешено: ${d.unlocks.map(itemName).join(", ")}.</span></p>` : ""}
-    <button class="primary" data-act="decree">Принять к исполнению</button>`;
+    <div class="dlg-actions"><button class="primary" data-act="decree">Принять к исполнению</button></div>`;
 }
 
 // Прогноз на зиму: без выбора, только «Понятно».
@@ -835,7 +1060,7 @@ function forecastDialog(s) {
     <h2 id="dlg-title">Зима будет ${w.was}</h2>
     <p>${w.text}.</p></div>
     <p>${note}</p>
-    <button class="primary" data-act="forecast">Понятно</button>`;
+    <div class="dlg-actions"><button class="primary" data-act="forecast">Понятно</button></div>`;
 }
 
 // Подсказка к варианту события: что он сделает с городом.
@@ -885,8 +1110,8 @@ function reportDialog(r) {
       <li>${icon("wallet")}<span>За указ: +${r.reward} млрд</span></li>
     </ul>
     <p>Дальше — новый указ, строже, и новые преграды.</p>
-    <button class="primary" data-act="report">Работаем дальше</button>
-    <button class="secondary" data-act="retire">Уйти в отставку по собственному желанию</button>`;
+    <div class="dlg-actions"><button class="primary" data-act="report">Работаем дальше</button>
+    <button class="secondary" data-act="retire">Уйти в отставку по собственному желанию</button></div>`;
 }
 
 // Сравнение всегда с зимой до назначения игрока, а не с первой зимой партии.
@@ -911,7 +1136,7 @@ function warningDialog(text) {
   return `<div class="warning-card"><p class="who">${icon("landmark", { size: 14 })}Президент</p>
     <h2 id="dlg-title">«${text}»</h2>
     <p>${note}</p></div>
-    <button class="primary" data-act="ack">Понятно</button>`;
+    <div class="dlg-actions"><button class="primary" data-act="ack">Понятно</button></div>`;
 }
 
 // Провал указа: какая задача и с какими числами, и какая была зима.
@@ -962,7 +1187,7 @@ function final(s) {
     ${titled ? `<p class="titleline">Титул: <b>${title(s)}</b></p>` : ""}
     ${summaryHtml(s)}
     <p class="stats-line">На посту: ${daysWord(s.day)}. Доверие горожан ${Math.round(rating(s))}, указов выполнено: ${s.decreesDone}.</p>
-    <button class="primary" data-act="restart">Начать заново</button>`;
+    <div class="dlg-actions"><button class="primary" data-act="restart">Начать заново</button></div>`;
 }
 
 // --- цикл ---
@@ -1209,7 +1434,7 @@ function build(key, withLoan = false) {
   if (loan) track(`loan/${loan}`);
   track(`build/${kind === "n" ? "nmu" : id}`);
   const spent = prev.budget - state.budget;
-  if (spent) floatDelta(hud.money, `${spent > 0 ? "−" : "+"}${Math.abs(spent)}`, spent < 0);
+  if (spent) floatDelta(moneyBtn(), `${spent > 0 ? "−" : "+"}${Math.abs(spent)}`, spent < 0);
   const where = kind === "d" ? selected : CITY_SITE[id];
   if (where && DISTRICTS.some(d => d.id === where)) flashOsmDistrict(osm, where);
   const text = buildText(kind, id, selected, state);
@@ -1230,7 +1455,7 @@ undoBtn.addEventListener("click", () => {
   state = prev;
   feedQuiet = true;
   panelShown = null;
-  if (spent) floatDelta(hud.money, `+${spent}`, true);
+  if (spent) floatDelta(moneyBtn(), `+${spent}`, true);
   showToast(spent ? `Отменено, ${spent} млрд вернулись` : "Отменено");
   draw();
   saveNow();
@@ -1261,13 +1486,24 @@ tabs.addEventListener("click", e => {
   if (c) select(c.dataset.tab, "tab");
 });
 // «К мерам»: к мерам выбранного района (на телефоне — раскрыть шторку). Какую начать, решает игрок.
-$("h-idle-go").addEventListener("click", () => {
-  if (isMobile()) setSheet(true);
+function toMeasures() {
+  if (isMobile()) {
+    togglePop(mh.task, mh.details, false);
+    if (sheetView !== "measures") { sheetView = "measures"; panelShown = null; drawPanel(); }
+    if (sheet === "peek") setSheet("half");
+  }
   focusFirstMeasure();
-});
+}
+$("h-idle-go").addEventListener("click", toMeasures);
+$("md-idle-go").addEventListener("click", toMeasures);
 document.querySelector(".speed").addEventListener("click", e => {
   const b = e.target.closest("[data-speed]");
   if (b && playing()) { setSpeed(Number(b.dataset.speed)); coach.speed(); }
+});
+mh.speed.addEventListener("click", () => {
+  if (!playing()) return;
+  setSpeed(speed === 0 ? 1 : speed === 1 ? 3 : 0);
+  coach.speed();
 });
 
 dialog.addEventListener("click", e => {
@@ -1286,7 +1522,7 @@ dialog.addEventListener("click", e => {
     state = takeLoan(state, amount);
     track(`loan/${amount}`);
     hideDialog();
-    floatDelta(hud.money, `+${amount}`, true);
+    floatDelta(moneyBtn(), `+${amount}`, true);
     const l = state.loans.at(-1);
     showToast(`Взят кредит ${amount} млрд: −${num2(l.perDay)} в день ${SIM.loan.days} дн., переплата ${num1(l.left - amount)}`);
     draw();
@@ -1308,27 +1544,103 @@ dialog.addEventListener("click", e => {
   if (a === "report" || a === "decree" || a === "forecast" || a === "retire" || a === "ack") saveNow();
 });
 
-// Шторка: нажатие переключает, движение вверх/вниз по ручке — раскрывает/сворачивает.
-let dragY = null;
-let dragged = false;
-sheetHandle.addEventListener("pointerdown", e => { dragY = e.clientY; dragged = false; });
-sheetHandle.addEventListener("pointermove", e => { if (dragY !== null && Math.abs(e.clientY - dragY) > 24) dragged = true; });
-sheetHandle.addEventListener("pointerup", e => { if (dragY !== null && dragged) setSheet(e.clientY < dragY); dragY = null; });
-sheetHandle.addEventListener("pointercancel", () => { dragY = null; });
-sheetHandle.addEventListener("click", () => {
-  if (dragged) { dragged = false; return; }
-  setSheet(!sheetOpen());
+// Шторка пальцем: тянуть можно за шапку, а свёрнутую — и за меры (в ней ничего не листается).
+// Движение больше 8 px — это перетаскивание, и клик по кнопке под пальцем после него не срабатывает.
+let drag = null; // { id, y0, h0, lastY, lastT, v, moved }
+let eatClick = false;
+aside.addEventListener("pointerdown", e => {
+  eatClick = false;
+  if (!isMobile() || e.button > 0 || drag) return;
+  const head = e.target.closest("#sheet-head");
+  if (!head && !(sheet === "peek" && e.target.closest("#panel-body, #news-body"))) return;
+  drag = { id: e.pointerId, y0: e.clientY, h0: aside.offsetHeight, lastY: e.clientY, lastT: e.timeStamp, v: 0, moved: false };
+});
+aside.addEventListener("pointermove", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  const dy = e.clientY - drag.y0;
+  if (!drag.moved) {
+    if (Math.abs(dy) < 8) return;
+    drag.moved = true;
+    aside.setPointerCapture?.(e.pointerId);
+    aside.classList.add("dragging");
+  }
+  const dt = e.timeStamp - drag.lastT;
+  if (dt > 0) drag.v = 0.6 * drag.v + 0.4 * ((e.clientY - drag.lastY) / dt);
+  drag.lastY = e.clientY;
+  drag.lastT = e.timeStamp;
+  aside.style.height = `${Math.round(Math.max(Math.min(peekH, 120) * 0.8, Math.min(fullPx(), drag.h0 - dy)))}px`;
+});
+function endDrag(e) {
+  if (!drag || e.pointerId !== drag.id) return;
+  const d = drag;
+  drag = null;
+  aside.classList.remove("dragging");
+  if (!d.moved) return;
+  eatClick = true;
+  const h = aside.offsetHeight;
+  const hs = { peek: peekH || h, half: halfPx(), full: fullPx() };
+  let to;
+  if (Math.abs(d.v) > 0.45) {
+    // взмах: на одно положение в сторону движения от того места, где шторка сейчас
+    to = d.v < 0 ? SNAP.find(s => hs[s] > h + 4) ?? "full" : [...SNAP].reverse().find(s => hs[s] < h - 4) ?? "peek";
+  } else to = SNAP.reduce((a, s) => (Math.abs(hs[s] - h) < Math.abs(hs[a] - h) ? s : a), "peek");
+  setSheet(to);
+}
+aside.addEventListener("pointerup", endDrag);
+// браузер забрал жест себе: шторка возвращается в своё положение
+aside.addEventListener("pointercancel", e => {
+  if (!drag || e.pointerId !== drag.id) return;
+  drag = null;
+  aside.classList.remove("dragging");
+  aside.style.height = "";
+});
+aside.addEventListener("click", e => { if (eatClick) { eatClick = false; e.preventDefault(); e.stopPropagation(); } }, true);
+sheetHandle.addEventListener("click", () => setSheet(sheet === "peek" ? "half" : "peek"));
+sizeBtn.addEventListener("click", () => setSheet(sheet === "full" ? "peek" : "full"));
+for (const b of document.querySelectorAll(".sheet-nav")) {
+  b.addEventListener("click", () => {
+    const ids = DISTRICTS.map(d => d.id);
+    const i = ids.indexOf(lastDistrict);
+    const step = Number(b.dataset.step);
+    if (sheetView === "news") sheetView = "measures";
+    // из «Города» стрелка возвращает к последнему району и дальше
+    select(selected === "city" && step > 0 ? lastDistrict : ids[(i + step + ids.length) % ids.length], "tab");
+  });
+}
+sheetTabs.addEventListener("click", e => {
+  const b = e.target.closest("[data-view]");
+  if (b) setSheetView(b.dataset.view);
+});
+// стрелки влево и вправо — по вкладкам шторки, как в любом списке вкладок
+sheetTabs.addEventListener("keydown", e => {
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const list = [...sheetTabs.querySelectorAll("[data-view]")];
+  const i = list.indexOf(document.activeElement);
+  if (i < 0) return;
+  e.preventDefault();
+  const next = list[(i + (e.key === "ArrowRight" ? 1 : -1) + list.length) % list.length];
+  setSheetView(next.dataset.view);
+  next.focus();
+});
+addEventListener("popstate", () => {
+  togglePop(mh.task, mh.details, false);
+  if (sheet !== "peek") setSheet("peek", { fromHistory: true });
 });
 
 // Всплывашки HUD: клавиши и прогноз зимы. Одна открыта, клик мимо или Esc закрывает.
-const pops = [[$("h-help"), $("hotkeys")], [hud.weather, hud.weatherPop]];
+// На телефоне так же раскрываются подробности задачи года.
+const pops = [[$("h-help"), $("hotkeys")], [hud.weather, hud.weatherPop], [mh.task, mh.details]];
 function togglePop(btn, pop, open = pop.hidden) {
   for (const [b, p] of pops) { p.hidden = true; b.setAttribute("aria-expanded", "false"); }
   pop.hidden = !open;
   btn.setAttribute("aria-expanded", String(open));
+  if (open && pop === mh.details) drawMobileHud();
+  invalidate();
 }
 for (const [b, p] of pops) b.addEventListener("click", () => togglePop(b, p));
+$("md-close").addEventListener("click", () => { togglePop(mh.task, mh.details, false); mh.task.focus(); });
 hud.money.addEventListener("click", openLoan);
+mh.money.addEventListener("click", openLoan);
 // Кредит закрывается и кликом мимо окна; остальные окна — только выбором.
 overlay.addEventListener("click", e => { if (e.target === overlay && dlg === "loan") { hideDialog(); draw(); } });
 document.addEventListener("click", e => {
@@ -1337,17 +1649,18 @@ document.addEventListener("click", e => {
 
 // Первые шаги: три подсказки до первой стройки и после неё. Только на эту сессию, «Скрыть» — насовсем.
 const coachEl = $("coach");
+// На телефоне подсказки говорят про шторку и одну кнопку скорости.
 const COACH = [
-  { text: "1/3 · Выберите район: нажмите на него на карте или на вкладку с названием.", anchor: () => $("map"), inside: true },
-  { text: "2/3 · Постройте меру: у каждой цена, срок и вклад в зиму; нажмите на строку, чтобы увидеть подробности.", anchor: () => panel.querySelector(".mrow.ready") ?? $("m-title"), side: true },
-  { text: "3/3 · Время идёт само: ▶ и ▶▶ — скорость, пробел — пауза. На паузе только что начатую стройку можно отменить.", anchor: () => document.querySelector(".speed") },
+  { text: () => (isMobile() ? "1/3 · Выберите район: нажмите на него на карте или листайте стрелками ‹ › в шторке снизу." : "1/3 · Выберите район: нажмите на него на карте или на вкладку с названием."), anchor: () => $("map"), inside: true },
+  { text: () => "2/3 · Постройте меру: у каждой цена, срок и вклад в зиму; нажмите на строку, чтобы увидеть подробности.", anchor: () => panel.querySelector(".mrow.ready") ?? $("m-title"), side: true },
+  { text: () => (isMobile() ? "3/3 · Время идёт само: кнопка наверху справа — пауза, ×1 и ×3. На паузе только что начатую стройку можно отменить." : "3/3 · Время идёт само: ▶ и ▶▶ — скорость, пробел — пауза. На паузе только что начатую стройку можно отменить."), anchor: () => (isMobile() ? mh.speed : document.querySelector(".speed")) },
 ];
 const coach = {
   step: -1, off: false, target: null,
   show(i) {
     if (i >= COACH.length) { this.stop(); return; }
     this.step = i;
-    put($("coach-text"), COACH[i].text);
+    put($("coach-text"), COACH[i].text());
     put($("coach-next"), i === COACH.length - 1 ? "Понятно" : "Далее");
   },
   stop() {
@@ -1403,8 +1716,9 @@ document.addEventListener("keydown", e => {
   if (!overlay.hidden || !started || e.ctrlKey || e.metaKey || e.altKey) return;
   if (e.target.closest?.("input, textarea, select, [contenteditable]")) return;
   if (e.key === "Escape") {
-    for (const [b, p] of pops) if (!p.hidden) togglePop(b, p, false);
-    if (sheetOpen()) setSheet(false);
+    const popOpen = pops.some(([, p]) => !p.hidden);
+    for (const [b, p] of pops) if (!p.hidden) { togglePop(b, p, false); if (p === mh.details) mh.task.focus(); }
+    if (!popOpen && sheetOpen()) setSheet("peek");
     return;
   }
   if (e.repeat) return;
@@ -1439,21 +1753,39 @@ addEventListener("resize", invalidate);
 
 // Карта: контейнер уже имеет высоту из CSS. Размер следим сами, Leaflet видит только окно.
 const mapEl = $("map");
-const osm = createOsmMap(mapEl, { onSelect: id => { if (playing()) select(id, "map"); } });
+document.documentElement.style.setProperty("--hud-h", `${$("hud").offsetHeight}px`); // до карты: её размер зависит от HUD
+placeFeed();
+setSheet("peek", { fromHistory: true });
+drawSpeedBtn();
+// на телефоне шторка закрывает низ карты: город вписываем в видимую часть над ней (боком шторка справа — не нужно)
+const osm = createOsmMap(mapEl, { onSelect: id => { if (playing()) select(id, "map"); }, padBottom: isMobile() && innerHeight > 500 ? aside.offsetHeight : 0,
+  padRight: isMobile() && innerHeight <= 500 ? aside.offsetWidth + 8 : 0,
+});
 const fx = createFx(osm);
 osm.map.on("move zoomend resize viewreset", wake); // карту двигают — живой слой перерисует стоп-кадр
 new ResizeObserver(() => resizeOsmMap(osm)).observe(mapEl);
 
-// Высота HUD зависит от ширины и от тревоги; под неё подстраиваются карта и панель.
-// --hud-peek: на телефоне при прокрутке верх HUD уезжает, а скорость, задача президента и шкала воздуха остаются.
+// Высота HUD зависит от ширины и от тревоги; под неё подстраиваются карта и панель (на телефоне — и шторка).
 new ResizeObserver(() => {
-  const root = document.documentElement.style;
-  root.setProperty("--hud-h", `${$("hud").offsetHeight}px`);
-  // по прямоугольникам: offsetTop у прилипшего HUD включает прокрутку, и HUD уезжал за экран
-  const peek = document.querySelector(".hud-date").getBoundingClientRect().top - $("hud").getBoundingClientRect().top - 6;
-  root.setProperty("--hud-peek", `${Math.max(0, Math.round(peek))}px`);
+  document.documentElement.style.setProperty("--hud-h", `${$("hud").offsetHeight}px`);
   invalidate();
 }).observe($("hud"));
+// --sheet-h: над шторкой встают тост и значки карты; высоту свёрнутой шторки помним для перетаскивания
+new ResizeObserver(() => {
+  document.documentElement.style.setProperty("--sheet-h", `${isMobile() ? aside.offsetHeight : 0}px`);
+  if (isMobile() && sheet === "peek" && !aside.style.height) peekH = aside.offsetHeight;
+  invalidate();
+}).observe(aside);
+// Телефон ↔ большой экран (поворот, окно уже 900 px): лента переезжает, панель пересобирается, шторка сворачивается.
+mobileMq.addEventListener("change", () => {
+  placeFeed();
+  feedShown = null;
+  feedQuiet = true;
+  panelShown = null;
+  togglePop(mh.task, mh.details, false);
+  setSheet("peek", { fromHistory: true });
+  invalidate();
+});
 for (const el of document.querySelectorAll("[data-icon]")) el.innerHTML = icon(el.dataset.icon);
 initGauge();
 tabs.innerHTML = tabsHtml();
@@ -1493,6 +1825,7 @@ wake();
 export const debug = {
   get state() { return state; },
   set state(s) { state = s; invalidate(); },
+  get osm() { return osm; },
   redraw() { dlg = null; draw(); },
   loopStats,
   saveNow,

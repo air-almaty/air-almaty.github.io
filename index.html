@@ -78,6 +78,37 @@
       <button class="hud-weather" id="h-weather" aria-expanded="false" aria-controls="h-weather-pop"><span class="hud-ico" id="h-weather-ico" aria-hidden="true"></span><span id="h-weather-short"></span></button>
       <p class="weather-pop" id="h-weather-pop" hidden></p>
     </div>
+    <!-- телефон: два ряда вместо шести, подробности по нажатию на задачу года -->
+    <div class="mhud" id="mhud">
+      <div class="m-row1">
+        <div class="m-date"><span class="m-season" id="m-season" role="img"></span><span class="m-date-text"><b id="m-year"></b><small id="m-days"></small></span></div>
+        <button class="m-money" id="m-money" aria-haspopup="dialog"><span class="m-ico" data-icon="wallet" aria-hidden="true"></span><span class="m-val"><b id="m-budget"></b><small id="m-income"></small></span></button>
+        <div class="m-trust" id="m-trust"><span class="m-val"><span class="m-ico" data-icon="handshake" aria-hidden="true"></span><b id="m-rating"></b><small class="sr-only" id="m-rating-note">доверие</small></span><span class="m-rbar" aria-hidden="true"><i id="m-rating-fill"></i><em></em></span></div>
+        <div class="m-aqi" id="m-aqi" data-level="ok"><small>AQI</small><b id="m-aqi-val"></b></div>
+        <button class="m-speed" id="m-speed"><span class="m-speed-ico" id="m-speed-ico" aria-hidden="true"></span><small id="m-speed-txt" aria-hidden="true"></small></button>
+      </div>
+      <button class="m-task" id="m-task" data-risk="wait" aria-expanded="false" aria-controls="m-details">
+        <span class="m-task-ico" id="m-task-ico" aria-hidden="true"></span><span class="m-task-text" id="m-task-text"></span>
+        <span class="m-badge" id="m-crit" hidden><span data-icon="siren" aria-hidden="true"></span><span id="m-crit-txt"></span></span><span class="m-badge" id="m-idle" hidden><span data-icon="hourglass" aria-hidden="true"></span><span id="m-idle-txt"></span></span>
+        <span class="m-more" data-icon="chevron-down" aria-hidden="true"></span>
+      </button>
+      <div class="m-details" id="m-details" role="region" aria-label="Указ, воздух и погода" hidden>
+        <section class="md-decree" id="md-decree" data-risk="wait">
+          <p class="md-head"><span data-icon="scroll" aria-hidden="true"></span><b id="md-decree-title"></b><small id="md-decree-days"></small></p>
+          <ul class="md-tasks" id="md-tasks"></ul>
+          <p class="md-note">Не выполните указ — президент снимет сразу.</p>
+        </section>
+        <div class="hud-idle md-idle" id="md-idle" data-urgency="calm" hidden><span class="hud-ico" data-icon="hourglass" aria-hidden="true"></span><b id="md-idle-text"></b><button id="md-idle-go">К мерам <span data-icon="arrow-right"></span></button></div>
+        <dl class="md-list">
+          <dt>Воздух</dt><dd id="md-air"></dd>
+          <dt>Бюджет</dt><dd id="md-money"></dd>
+          <dt>Доверие</dt><dd id="md-trust"></dd>
+          <dt>Зима</dt><dd id="md-weather"></dd>
+          <dt>Ветер</dt><dd id="md-wind"></dd>
+        </dl>
+        <button class="secondary md-close" id="md-close">Закрыть</button>
+      </div>
+    </div>
   </header>
   <main class="game" id="game">
     <section class="map-col">
@@ -86,13 +117,27 @@
         <div class="paused-badge" aria-hidden="true"><span data-icon="pause"></span>пауза</div>
         <div class="inversion-badge"><span data-icon="snowflake" aria-hidden="true"></span>Слой инверсии: горы и холод запирают смог в котловине</div>
       </div>
-      <div class="under-map">
+      <div class="under-map" id="news-body">
         <h2 class="feed-title">Новости</h2>
         <ul id="feed" class="feed" aria-live="polite" aria-label="Новости"></ul>
       </div>
     </section>
     <aside class="panel" id="panel" aria-label="Меры и районы">
-      <button class="sheet-handle" id="sheet-handle" aria-expanded="false" aria-controls="panel-body"><span class="grip" aria-hidden="true"></span><b id="sheet-title"></b><span class="pill" id="sheet-aqi"></span><span class="sheet-more" id="sheet-more">Все меры</span></button>
+      <!-- телефон: шапка шторки. Ручку тянут пальцем; нажатие — свернуть и раскрыть наполовину, кнопка-стрелка — во весь экран -->
+      <div class="sheet-head" id="sheet-head">
+        <div class="sheet-bar">
+          <button class="sheet-nav" data-step="-1" aria-label="Предыдущий район"><span data-icon="chevron-left"></span></button>
+          <button class="sheet-handle" id="sheet-handle" aria-expanded="false" aria-controls="panel-body"><span class="grip" aria-hidden="true"></span><b id="sheet-title"></b><span class="pill" id="sheet-aqi"></span></button>
+          <button class="sheet-nav" data-step="1" aria-label="Следующий район"><span data-icon="chevron-right"></span></button>
+          <button class="sheet-size" id="sheet-size" aria-expanded="false" aria-controls="panel-body"><span id="sheet-size-ico" aria-hidden="true"></span></button>
+        </div>
+        <div class="sheet-tabs" id="sheet-tabs" role="tablist" aria-label="Что показать в шторке">
+          <button role="tab" id="st-measures" data-view="measures" aria-selected="true" aria-controls="panel-body">Меры</button>
+          <button role="tab" id="st-district" data-view="district" aria-selected="false" aria-controls="panel-body">Район</button>
+          <button role="tab" id="st-city" data-view="city" aria-selected="false" aria-controls="panel-body">Город</button>
+          <button role="tab" id="st-news" data-view="news" aria-selected="false" aria-controls="news-body">Новости</button>
+        </div>
+      </div>
       <nav class="tabs" id="tabs" aria-label="Районы"></nav>
       <div id="panel-body" class="panel-body" aria-live="off"></div>
     </aside>
